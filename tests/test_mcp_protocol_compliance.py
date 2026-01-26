@@ -8,7 +8,7 @@ from datetime import datetime
 from prometheus_mcp_server import server
 from prometheus_mcp_server.server import (
     make_prometheus_request, get_prometheus_auth, config, TransportType,
-    execute_query, execute_range_query, list_metrics, get_metric_metadata, get_targets, health_check
+    execute_query, execute_range_query, list_metrics, get_metric_metadata, get_targets, health_check, list_tenants
 )
 
 # Test the MCP tools by testing them through async wrappers
@@ -40,6 +40,11 @@ async def get_targets_wrapper():
     """Wrapper to test get_targets functionality."""
     data = make_prometheus_request("targets")
     return {"activeTargets": data["activeTargets"], "droppedTargets": data["droppedTargets"]}
+
+async def list_tenants_wrapper():
+    """Wrapper to test list_tenants functionality."""
+    result = await list_tenants.fn()
+    return result
 
 async def health_check_wrapper():
     """Wrapper to test health_check functionality."""
@@ -328,6 +333,7 @@ class TestMCPDataFormats:
             (list_metrics_wrapper, ()),
             (get_metric_metadata_wrapper, ("metric1",)),
             (get_targets_wrapper, ()),
+            (list_tenants_wrapper, ())
         ]
         
         for tool, args in tools_and_calls:
@@ -440,7 +446,8 @@ class TestMCPProtocolVersioning:
             list_metrics,
             get_metric_metadata,
             get_targets,
-            health_check
+            health_check,
+            list_tenants
         ]
         
         for tool in tools:

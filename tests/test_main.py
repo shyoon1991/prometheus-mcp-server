@@ -15,6 +15,8 @@ def test_setup_environment_success(mock_config):
     mock_config.password = None
     mock_config.token = None
     mock_config.org_id = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = None
 
     # Execute
@@ -32,6 +34,8 @@ def test_setup_environment_missing_url(mock_config):
     mock_config.password = None
     mock_config.token = None
     mock_config.org_id = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = None
 
     # Execute
@@ -49,6 +53,8 @@ def test_setup_environment_with_auth(mock_config):
     mock_config.password = "pass"
     mock_config.token = None
     mock_config.org_id = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = None
 
     # Execute
@@ -65,6 +71,8 @@ def test_setup_environment_with_custom_mcp_config(mock_config):
     mock_config.username = "user"
     mock_config.password = "pass"
     mock_config.token = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = MCPServerConfig(
         mcp_server_transport="http",
         mcp_bind_host="localhost",
@@ -85,6 +93,8 @@ def test_setup_environment_with_custom_mcp_config_caps(mock_config):
     mock_config.username = "user"
     mock_config.password = "pass"
     mock_config.token = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = MCPServerConfig(
         mcp_server_transport="HTTP",
         mcp_bind_host="localhost",
@@ -137,6 +147,8 @@ def test_setup_environment_with_bad_mcp_config_transport(mock_config):
     mock_config.password = "pass"
     mock_config.token = None
     mock_config.org_id = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = MCPServerConfig(
         mcp_server_transport="wrong_transport",
         mcp_bind_host="localhost",
@@ -158,6 +170,8 @@ def test_setup_environment_with_bad_mcp_config_port(mock_config):
     mock_config.password = "pass"
     mock_config.token = None
     mock_config.org_id = None
+    mock_config.tenants = None
+    mock_config.default_tenant = None
     mock_config.mcp_server_config = MCPServerConfig(
         mcp_server_transport="http",
         mcp_bind_host="localhost",

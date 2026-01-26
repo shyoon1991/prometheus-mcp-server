@@ -17,7 +17,8 @@ from prometheus_mcp_server.server import (
     mcp,
     get_cached_metrics,
     _metrics_cache,
-    _CACHE_TTL
+    _CACHE_TTL,
+    _get_cache_key
 )
 
 
@@ -44,7 +45,8 @@ class TestToolAnnotations:
                 "execute_range_query",
                 "list_metrics",
                 "get_metric_metadata",
-                "get_targets"
+                "get_targets",
+                "list_tenants"
             ]
 
             tool_names = [tool.name for tool in tools]
@@ -115,7 +117,8 @@ class TestToolTitles:
                 "execute_range_query": "Execute PromQL Range Query",
                 "list_metrics": "List Available Metrics",
                 "get_metric_metadata": "Get Metric Metadata",
-                "get_targets": "Get Scrape Targets"
+                "get_targets": "Get Scrape Targets",
+                "list_tenants": "List Tenants"
             }
 
             for tool in tools:
@@ -319,8 +322,7 @@ class TestMetricsCaching:
             mock_request.return_value = ["metric1", "metric2"]
 
             # Clear cache
-            _metrics_cache["data"] = None
-            _metrics_cache["timestamp"] = 0
+            _metrics_cache.clear()
 
             # First call should fetch from Prometheus
             result1 = get_cached_metrics()
@@ -339,8 +341,7 @@ class TestMetricsCaching:
                 mock_request.return_value = ["metric1", "metric2"]
 
                 # Clear cache
-                _metrics_cache["data"] = None
-                _metrics_cache["timestamp"] = 0
+                _metrics_cache.clear()
 
                 # First call at time 0
                 mock_time.time.return_value = 0
@@ -368,14 +369,14 @@ class TestMetricsCaching:
         with patch("prometheus_mcp_server.server.make_prometheus_request") as mock_request:
             # First successful call
             mock_request.return_value = ["metric1", "metric2"]
-            _metrics_cache["data"] = None
-            _metrics_cache["timestamp"] = 0
+            _metrics_cache.clear()
 
             result1 = get_cached_metrics()
             assert len(result1) == 2
 
             # Expire cache and make request fail
-            _metrics_cache["timestamp"] = 0
+            cache_key = _get_cache_key(None)
+            _metrics_cache[cache_key]["timestamp"] = 0
             mock_request.side_effect = Exception("Connection error")
 
             # Should return stale cache data instead of raising
@@ -389,8 +390,7 @@ class TestMetricsCaching:
             mock_request.side_effect = Exception("Connection error")
 
             # Clear cache completely
-            _metrics_cache["data"] = None
-            _metrics_cache["timestamp"] = 0
+            _metrics_cache.clear()
 
             result = get_cached_metrics()
             assert result == [], "Should return empty list when no data available"

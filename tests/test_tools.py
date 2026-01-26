@@ -4,7 +4,7 @@ import pytest
 import json
 from unittest.mock import patch, MagicMock
 from fastmcp import Client
-from prometheus_mcp_server.server import mcp, execute_query, execute_range_query, list_metrics, get_metric_metadata, get_targets
+from prometheus_mcp_server.server import mcp, execute_query, execute_range_query, list_metrics, get_metric_metadata, get_targets, list_tenants, config
 
 @pytest.fixture
 def mock_make_request():
@@ -26,7 +26,7 @@ async def test_execute_query(mock_make_request):
         result = await client.call_tool("execute_query", {"query":"up"})
 
         # Verify
-        mock_make_request.assert_called_once_with("query", params={"query": "up"})
+        mock_make_request.assert_called_once_with("query", params={"query": "up"}, tenant=None)
         assert result.data["resultType"] == "vector"
         assert len(result.data["result"]) == 1
         # Verify resource links are included (MCP 2025 feature)
@@ -48,7 +48,7 @@ async def test_execute_query_with_time(mock_make_request):
         result = await client.call_tool("execute_query", {"query":"up", "time":"2023-01-01T00:00:00Z"})
         
         # Verify
-        mock_make_request.assert_called_once_with("query", params={"query": "up", "time": "2023-01-01T00:00:00Z"})
+        mock_make_request.assert_called_once_with("query", params={"query": "up", "time": "2023-01-01T00:00:00Z"}, tenant=None)
         assert result.data["resultType"] == "vector"
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_execute_range_query(mock_make_request):
             "start": "2023-01-01T00:00:00Z",
             "end": "2023-01-01T01:00:00Z",
             "step": "15s"
-        })
+        }, tenant=None)
         assert result.data["resultType"] == "matrix"
         assert len(result.data["result"]) == 1
         assert len(result.data["result"][0]["values"]) == 2
@@ -102,7 +102,7 @@ async def test_list_metrics(mock_make_request):
         result = await client.call_tool("list_metrics", {})
 
         # Verify
-        mock_make_request.assert_called_once_with("label/__name__/values")
+        mock_make_request.assert_called_once_with("label/__name__/values", tenant=None)
         # Now returns a dict with pagination info
         assert result.data["metrics"] == ["up", "go_goroutines", "http_requests_total"]
         assert result.data["total_count"] == 3
@@ -121,7 +121,7 @@ async def test_list_metrics_with_pagination(mock_make_request):
         result = await client.call_tool("list_metrics", {"limit": 2, "offset": 1})
 
         # Verify
-        mock_make_request.assert_called_once_with("label/__name__/values")
+        mock_make_request.assert_called_once_with("label/__name__/values", tenant=None)
         assert result.data["metrics"] == ["metric2", "metric3"]
         assert result.data["total_count"] == 5
         assert result.data["returned_count"] == 2
@@ -139,7 +139,7 @@ async def test_list_metrics_with_filter(mock_make_request):
         result = await client.call_tool("list_metrics", {"filter_pattern": "http"})
 
         # Verify
-        mock_make_request.assert_called_once_with("label/__name__/values")
+        mock_make_request.assert_called_once_with("label/__name__/values", tenant=None)
         assert result.data["metrics"] == ["http_requests_total", "http_response_size"]
         assert result.data["total_count"] == 2
         assert result.data["returned_count"] == 2
@@ -163,7 +163,7 @@ async def test_get_metric_metadata(mock_make_request):
         print(json_data)
 
         # Verify
-        mock_make_request.assert_called_once_with("metadata?metric=up", params=None)
+        mock_make_request.assert_called_once_with("metadata?metric=up", params=None, tenant=None)
         assert len(json_data) == 1
         assert json_data[0]["metric"] == "up"
         assert json_data[0]["type"] == "gauge"
@@ -187,7 +187,31 @@ async def test_get_targets(mock_make_request):
         json_data = json.loads(payload)
 
         # Verify
-        mock_make_request.assert_called_once_with("targets")
+        mock_make_request.assert_called_once_with("targets", tenant=None)
         assert len(json_data["activeTargets"]) == 1
         assert json_data["activeTargets"][0]["health"] == "up"
         assert len(json_data["droppedTargets"]) == 0
+
+@pytest.mark.asyncio
+async def test_list_tenants_empty():
+    """Test list_tenants tool with no configured tenants."""
+    original_tenants = config.tenants
+    original_default = config.default_tenant
+    original_raw = config.tenants_raw
+    try:
+        config.tenants = {}
+        config.default_tenant = None
+        config.tenants_raw = ""
+
+        async with Client(mcp) as client:
+            result = await client.call_tool("list_tenants", {})
+
+            payload = result.content[0].text
+            json_data = json.loads(payload)
+
+            assert json_data["tenants"] == []
+            assert json_data["default_tenant"] is None
+    finally:
+        config.tenants = original_tenants
+        config.default_tenant = original_default
+        config.tenants_raw = original_raw

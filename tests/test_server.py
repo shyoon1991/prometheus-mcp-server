@@ -2,9 +2,17 @@
 
 import pytest
 import requests
+import json
 from unittest.mock import patch, MagicMock
 import asyncio
-from prometheus_mcp_server.server import make_prometheus_request, get_prometheus_auth, config
+from prometheus_mcp_server.server import (
+    make_prometheus_request,
+    get_prometheus_auth,
+    config,
+    initialize_tenants,
+    _resolve_tenant,
+    list_tenants
+)
 
 @pytest.fixture
 def mock_response():
@@ -20,7 +28,7 @@ def mock_response():
     }
     return mock
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_no_auth(mock_get, mock_response):
     """Test making a request to Prometheus with no authentication."""
     # Setup
@@ -37,7 +45,105 @@ def test_make_prometheus_request_no_auth(mock_get, mock_response):
     mock_get.assert_called_once()
     assert result == {"resultType": "vector", "result": []}
 
-@patch("prometheus_mcp_server.server.requests.get")
+
+def test_initialize_tenants_parses_json():
+    """Test that multi-tenant configuration is parsed and defaults are set."""
+    original_tenants = config.tenants
+    original_default = config.default_tenant
+    original_raw = config.tenants_raw
+    original_default_env = config.default_tenant_env
+    original_headers = config.custom_headers
+    original_ssl_verify = config.url_ssl_verify
+    try:
+        config.tenants = None
+        config.tenants_raw = json.dumps([
+            {
+                "name": "prod",
+                "url": "https://prometheus-prod.example.com",
+                "token": "token",
+                "org_id": "org-prod",
+                "custom_headers": {"X-Test": "value"}
+            },
+            {
+                "name": "staging",
+                "url": "https://prometheus-staging.example.com",
+                "username": "user",
+                "password": "pass"
+            }
+        ])
+        config.default_tenant_env = ""
+        config.custom_headers = {"X-Global": "global"}
+        config.url_ssl_verify = True
+
+        initialize_tenants()
+
+        assert "prod" in config.tenants
+        assert "staging" in config.tenants
+        assert config.default_tenant == "prod"
+        assert config.tenants["prod"].custom_headers["X-Global"] == "global"
+        assert config.tenants["prod"].custom_headers["X-Test"] == "value"
+    finally:
+        config.tenants = original_tenants
+        config.default_tenant = original_default
+        config.tenants_raw = original_raw
+        config.default_tenant_env = original_default_env
+        config.custom_headers = original_headers
+        config.url_ssl_verify = original_ssl_verify
+
+
+def test_resolve_tenant_unknown_raises():
+    """Test unknown tenant lookup raises a helpful error."""
+    original_tenants = config.tenants
+    original_default = config.default_tenant
+    original_raw = config.tenants_raw
+    original_default_env = config.default_tenant_env
+    try:
+        config.tenants = None
+        config.tenants_raw = json.dumps([
+            {"name": "prod", "url": "https://prometheus-prod.example.com"}
+        ])
+        config.default_tenant_env = "prod"
+        initialize_tenants()
+
+        with pytest.raises(ValueError, match="Unknown tenant"):
+            _resolve_tenant("missing")
+    finally:
+        config.tenants = original_tenants
+        config.default_tenant = original_default
+        config.tenants_raw = original_raw
+        config.default_tenant_env = original_default_env
+
+
+@pytest.mark.asyncio
+async def test_list_tenants_with_configured_entries():
+    """Test list_tenants returns configured tenants."""
+    original_tenants = config.tenants
+    original_default = config.default_tenant
+    try:
+        config.tenants = {
+            "prod": type("Tenant", (), {
+                "name": "prod",
+                "url": "https://prometheus-prod.example.com",
+                "url_ssl_verify": True,
+                "username": None,
+                "password": None,
+                "token": "token",
+                "org_id": "org-prod"
+            })()
+        }
+        config.default_tenant = "prod"
+
+        result = await list_tenants.fn(include_urls=True)
+        assert result["default_tenant"] == "prod"
+        assert result["tenants"][0]["name"] == "prod"
+        assert result["tenants"][0]["has_auth"] is True
+        assert result["tenants"][0]["has_org_id"] is True
+        assert result["tenants"][0]["url"] == "https://prometheus-prod.example.com"
+    finally:
+        config.tenants = original_tenants
+        config.default_tenant = original_default
+
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_basic_auth(mock_get, mock_response):
     """Test making a request to Prometheus with basic authentication."""
     # Setup
@@ -54,7 +160,7 @@ def test_make_prometheus_request_with_basic_auth(mock_get, mock_response):
     mock_get.assert_called_once()
     assert result == {"resultType": "vector", "result": []}
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_token_auth(mock_get, mock_response):
     """Test making a request to Prometheus with token authentication."""
     # Setup
@@ -71,7 +177,7 @@ def test_make_prometheus_request_with_token_auth(mock_get, mock_response):
     mock_get.assert_called_once()
     assert result == {"resultType": "vector", "result": []}
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_error(mock_get):
     """Test handling of an error response from Prometheus."""
     # Setup
@@ -85,7 +191,7 @@ def test_make_prometheus_request_error(mock_get):
     with pytest.raises(ValueError, match="Prometheus API error: Test error"):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_connection_error(mock_get):
     """Test handling of connection errors."""
     # Setup
@@ -96,7 +202,7 @@ def test_make_prometheus_request_connection_error(mock_get):
     with pytest.raises(requests.ConnectionError):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_timeout(mock_get):
     """Test handling of timeout errors."""
     # Setup
@@ -107,7 +213,7 @@ def test_make_prometheus_request_timeout(mock_get):
     with pytest.raises(requests.Timeout):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_http_error(mock_get):
     """Test handling of HTTP errors."""
     # Setup
@@ -120,7 +226,7 @@ def test_make_prometheus_request_http_error(mock_get):
     with pytest.raises(requests.HTTPError):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_json_error(mock_get):
     """Test handling of JSON decode errors."""
     # Setup
@@ -134,7 +240,7 @@ def test_make_prometheus_request_json_error(mock_get):
     with pytest.raises(requests.exceptions.JSONDecodeError):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_pure_json_decode_error(mock_get):
     """Test handling of pure json.JSONDecodeError."""
     import json
@@ -149,7 +255,7 @@ def test_make_prometheus_request_pure_json_decode_error(mock_get):
     with pytest.raises(ValueError, match="Invalid JSON response from Prometheus"):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_missing_url(mock_get):
     """Test make_prometheus_request with missing URL configuration."""
     # Setup
@@ -163,7 +269,7 @@ def test_make_prometheus_request_missing_url(mock_get):
     # Cleanup
     config.url = original_url
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_org_id(mock_get, mock_response):
     """Test making a request with org_id header."""
     # Setup
@@ -188,7 +294,7 @@ def test_make_prometheus_request_with_org_id(mock_get, mock_response):
     # Cleanup
     config.org_id = original_org_id
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_request_exception(mock_get):
     """Test handling of generic request exceptions."""
     # Setup
@@ -199,7 +305,7 @@ def test_make_prometheus_request_request_exception(mock_get):
     with pytest.raises(requests.exceptions.RequestException):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get") 
+@patch("prometheus_mcp_server.server._session.get") 
 def test_make_prometheus_request_response_error(mock_get):
     """Test handling of response errors from Prometheus."""
     # Setup - mock HTTP error response
@@ -213,7 +319,7 @@ def test_make_prometheus_request_response_error(mock_get):
     with pytest.raises(requests.HTTPError):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_generic_exception(mock_get):
     """Test handling of unexpected exceptions."""
     # Setup
@@ -224,7 +330,7 @@ def test_make_prometheus_request_generic_exception(mock_get):
     with pytest.raises(Exception, match="Unexpected error"):
         make_prometheus_request("query", {"query": "up"})
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_list_data_format(mock_get):
     """Test make_prometheus_request with list data format."""
     # Setup - mock response with list data format
@@ -243,7 +349,7 @@ def test_make_prometheus_request_list_data_format(mock_get):
     # Verify
     assert result == [{"metric": {}, "value": [1609459200, "1"]}]
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_ssl_verify_true(mock_get, mock_response):
     """Test making a request to Prometheus with SSL verification enabled."""
     # Setup
@@ -258,7 +364,7 @@ def test_make_prometheus_request_ssl_verify_true(mock_get, mock_response):
     mock_get.assert_called_once()
     assert result == {"resultType": "vector", "result": []}
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_ssl_verify_false(mock_get, mock_response):
     """Test making a request to Prometheus with SSL verification disabled."""
     # Setup
@@ -273,7 +379,7 @@ def test_make_prometheus_request_ssl_verify_false(mock_get, mock_response):
     mock_get.assert_called_once()
     assert result == {"resultType": "vector", "result": []}
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_custom_headers(mock_get, mock_response):
     """Test making a request with custom headers."""
     # Setup
@@ -298,7 +404,7 @@ def test_make_prometheus_request_with_custom_headers(mock_get, mock_response):
     # Cleanup
     config.custom_headers = original_custom_headers
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_multiple_custom_headers(mock_get, mock_response):
     """Test making a request with multiple custom headers."""
     # Setup
@@ -331,7 +437,7 @@ def test_make_prometheus_request_with_multiple_custom_headers(mock_get, mock_res
     # Cleanup
     config.custom_headers = original_custom_headers
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_custom_headers_and_token_auth(mock_get, mock_response):
     """Test making a request with custom headers combined with token authentication."""
     # Setup
@@ -362,7 +468,7 @@ def test_make_prometheus_request_with_custom_headers_and_token_auth(mock_get, mo
     config.custom_headers = original_custom_headers
     config.token = ""
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_custom_headers_and_org_id(mock_get, mock_response):
     """Test making a request with custom headers combined with org_id."""
     # Setup
@@ -392,7 +498,7 @@ def test_make_prometheus_request_with_custom_headers_and_org_id(mock_get, mock_r
     config.custom_headers = original_custom_headers
     config.org_id = original_org_id
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_empty_custom_headers(mock_get, mock_response):
     """Test making a request with empty custom headers dictionary."""
     # Setup
@@ -411,7 +517,7 @@ def test_make_prometheus_request_with_empty_custom_headers(mock_get, mock_respon
     # Cleanup
     config.custom_headers = original_custom_headers
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_none_custom_headers(mock_get, mock_response):
     """Test making a request with None custom headers."""
     # Setup
@@ -430,7 +536,7 @@ def test_make_prometheus_request_with_none_custom_headers(mock_get, mock_respons
     # Cleanup
     config.custom_headers = original_custom_headers
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_custom_headers_and_basic_auth(mock_get, mock_response):
     """Test making a request with custom headers combined with basic authentication."""
     # Setup
@@ -463,7 +569,7 @@ def test_make_prometheus_request_with_custom_headers_and_basic_auth(mock_get, mo
     config.username = ""
     config.password = ""
 
-@patch("prometheus_mcp_server.server.requests.get")
+@patch("prometheus_mcp_server.server._session.get")
 def test_make_prometheus_request_with_all_headers_combined(mock_get, mock_response):
     """Test making a request with custom headers, org_id, and token auth all combined."""
     # Setup
@@ -503,4 +609,3 @@ def test_make_prometheus_request_with_all_headers_combined(mock_get, mock_respon
     config.custom_headers = original_custom_headers
     config.org_id = original_org_id
     config.token = ""
-

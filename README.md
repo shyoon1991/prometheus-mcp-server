@@ -124,7 +124,7 @@ docker run -i --rm \
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `PROMETHEUS_URL` | URL of your Prometheus server | Yes |
+| `PROMETHEUS_URL` | URL of your Prometheus server (required unless `PROMETHEUS_TENANTS` is set) | Yes* |
 | `PROMETHEUS_URL_SSL_VERIFY` | Set to False to disable SSL verification | No |
 | `PROMETHEUS_DISABLE_LINKS` | Set to True to disable Prometheus UI links in query results (saves context tokens) | No |
 | `PROMETHEUS_REQUEST_TIMEOUT` | Request timeout in seconds to prevent hanging requests (DDoS protection) | No (default: 30) |
@@ -132,11 +132,165 @@ docker run -i --rm \
 | `PROMETHEUS_PASSWORD` | Password for basic authentication | No |
 | `PROMETHEUS_TOKEN` | Bearer token for authentication | No |
 | `ORG_ID` | Organization ID for multi-tenant setups | No |
+| `PROMETHEUS_TENANTS` | JSON array of tenant configs (name, url, optional auth) | No |
+| `PROMETHEUS_DEFAULT_TENANT` | Default tenant name when `PROMETHEUS_TENANTS` is set | No |
 | `PROMETHEUS_MCP_SERVER_TRANSPORT` | Transport mode (stdio, http, sse) | No (default: stdio) |
 | `PROMETHEUS_MCP_BIND_HOST` | Host for HTTP transport | No (default: 127.0.0.1) |
 | `PROMETHEUS_MCP_BIND_PORT` | Port for HTTP transport | No (default: 8080) |
 | `PROMETHEUS_CUSTOM_HEADERS` | Custom headers as JSON string | No |
 | `TOOL_PREFIX` | Prefix for all tool names (e.g., `staging` results in `staging_execute_query`). Useful for running multiple instances targeting different environments in Cursor | No |
+
+### MCP Client Configuration
+
+#### Single tenant
+
+```json
+{
+  "mcpServers": {
+    "prometheus": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "PROMETHEUS_URL",
+        "ghcr.io/pab1it0/prometheus-mcp-server:latest"
+      ],
+      "env": {
+        "PROMETHEUS_URL": "<url>"
+      }
+    }
+  }
+}
+```
+
+#### Multi-tenant
+
+```json
+{
+  "mcpServers": {
+    "prometheus": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "PROMETHEUS_TENANTS",
+        "-e",
+        "PROMETHEUS_DEFAULT_TENANT",
+        "ghcr.io/pab1it0/prometheus-mcp-server:latest"
+      ],
+      "env": {
+        "PROMETHEUS_TENANTS": "[{\"name\":\"prod\",\"url\":\"https://prometheus.example.com\",\"token\":\"your_token\"}]",
+        "PROMETHEUS_DEFAULT_TENANT": "prod"
+      }
+    }
+  }
+}
+```
+
+### Multi-tenant configuration
+
+Use `PROMETHEUS_TENANTS` to define multiple Prometheus/Thanos endpoints. Each tenant can provide its own URL and auth fields. If `PROMETHEUS_DEFAULT_TENANT` is not set, the first tenant becomes the default.
+
+```bash
+PROMETHEUS_TENANTS='[
+  {
+    "name": "production",
+    "url": "https://prometheus-prod.example.com",
+    "username": "prod_user",
+    "password": "prod_password",
+    "org_id": "org-prod"
+  },
+  {
+    "name": "staging",
+    "url": "https://prometheus-staging.example.com",
+    "token": "staging_bearer_token"
+  },
+  {
+    "name": "development",
+    "url": "http://localhost:9090"
+  }
+]'
+PROMETHEUS_DEFAULT_TENANT=production
+```
+
+When multi-tenant is enabled, all query tools accept an optional `tenant` parameter (defaults to `PROMETHEUS_DEFAULT_TENANT`).
+
+`list_tenants` returns a minimal tenant summary by default. To include URLs, call it with `include_urls: true`.
+
+### How to use (multi-tenant)
+
+1) Configure tenants
+
+```bash
+PROMETHEUS_TENANTS='[
+  {"name":"blue","url":"https://blue-prometheus.example.com"},
+  {"name":"black","url":"https://black-prometheus.example.com"},
+  {"name":"mgmt","url":"https://mgmt-thanos.example.com"}
+]'
+PROMETHEUS_DEFAULT_TENANT=mgmt
+```
+
+2) Call tools with tenant selection (example JSON-RPC)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "q1",
+  "method": "tools/call",
+  "params": {
+    "name": "execute_query",
+    "arguments": {
+      "query": "count(up)",
+      "tenant": "blue"
+    }
+  }
+}
+```
+
+### Verification (simple)
+
+Use `count(up)` to verify each tenant responds with data:
+
+- tenant `mgmt`: `count(up)` returns a vector result
+- tenant `blue`: `count(up)` returns a vector result
+- tenant `black`: `count(up)` returns a vector result
+
+If a tenant is unreachable or misconfigured, the tool call returns an MCP error.
+
+### Transport and streaming
+
+This server supports MCP `stdio`, `http`, and `sse` transports. Use `sse` when you want streaming responses over HTTP. The `http` transport is request/response (non-streaming).
+
+```bash
+# Run as an HTTP server with streaming (SSE)
+PROMETHEUS_MCP_SERVER_TRANSPORT=sse
+PROMETHEUS_MCP_BIND_HOST=0.0.0.0
+PROMETHEUS_MCP_BIND_PORT=8080
+```
+
+### Communication optimizations
+
+- Prefer `sse` for streaming in remote MCP clients.
+- Use `PROMETHEUS_DISABLE_LINKS=True` to reduce response payloads if you don't need UI links.
+- Connection reuse is enabled for Prometheus API calls to reduce handshake overhead.
+
+### In-cluster Service Access (Kubernetes)
+
+When running in Kubernetes, point `PROMETHEUS_URL` (or tenant URLs) to the Service DNS:
+
+```text
+http://<service>.<namespace>.svc.cluster.local:<port>
+```
+
+Example:
+
+```text
+http://prometheus.monitoring.svc.cluster.local:9090
+```
 
 ## Available Tools
 
@@ -148,6 +302,7 @@ docker run -i --rm \
 | `list_metrics` | Discovery | List all available metrics in Prometheus with pagination and filtering support |
 | `get_metric_metadata` | Discovery | Get metadata for a specific metric |
 | `get_targets` | Discovery | Get information about all scrape targets |
+| `list_tenants` | Discovery | List configured Prometheus tenants (when multi-tenant is enabled) |
 
 The list of tools is configurable, so you can choose which tools you want to make available to the MCP client. This is useful if you don't use certain functionality or if you don't want to take up too much of the context window.
 
